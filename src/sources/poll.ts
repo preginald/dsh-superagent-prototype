@@ -14,6 +14,12 @@ export function polled(ctx: SourceContext, thread: Thread, now = Date.now()): bo
 }
 /** Steps a poll start timestamp back by 5 seconds so late-arriving remote events are not missed; deterministic trigger IDs deduplicate overlaps. */
 export const cursorAt = (started: string): string => new Date(Date.parse(started) - 5000).toISOString()
+/**
+ * How far a notified thread is read back past its cursor. GitHub can surface a notification long after the comment it names was
+ * written, so a notice whose item is older than the cursor would otherwise be filtered out as already handled and lost for good.
+ * Re-reads are free of duplicates because a Trigger's ID is derived from the item's own identity.
+ */
+export const NOTIFICATION_LAG_MS = 15 * 60_000
 /** Polls each subscribed Thread of `source` within the horizon independently; records failures on the Thread as `pollError` (unless `stopped()`) and clears `pollError` on success. */
 export async function pollThreads(ctx: SourceContext, source: string, stopped: () => boolean, poll: (thread: Thread) => Promise<void>,
   skip: (thread: Thread) => boolean = () => false): Promise<void> {

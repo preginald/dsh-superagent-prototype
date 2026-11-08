@@ -11,7 +11,7 @@ import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
 import { apply as applyGithub, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
 import { pollThreads as pollGithubThreads } from '../src/sources/github.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
-import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
+import { cursorAt, NOTIFICATION_LAG_MS, POLL_HORIZON_MS } from '../src/sources/poll.ts'
 import { Store } from '../src/app/store.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
@@ -589,7 +589,8 @@ describe('github source', () => {
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.number)).toEqual([13])
     // The cursor moved together with the Issue it does not cover yet.
     expect(Date.parse(h.store.get<string>('github-since')!)).toBeGreaterThan(Date.parse('2026-09-08T00:00:00.000Z'))
-    expect(h.store.get('github-retry')).toEqual({ 12: { since: '2026-09-08T00:00:00.000Z', pr: false, attempts: 1, failedAt: expect.any(String) } })
+    expect(h.store.get('github-retry')).toEqual({ 12: { since: new Date(Date.parse('2026-09-08T00:00:00.000Z') - NOTIFICATION_LAG_MS).toISOString(),
+      pr: false, attempts: 1, failedAt: expect.any(String) } })
     expect(h.store.threads.get('github:12')!.meta.pollError).toContain('Bad Gateway')
     Object.assign(routes, { notifications: [], 'issues/12': issue(12, { created_at: '2026-08-01T00:00:00Z' }),
       'issues/12/comments': [mention(2, 12, '2026-09-08T02:00:00Z')] })
@@ -858,9 +859,22 @@ describe('github source', () => {
     await pollRound(h)
     const expected = commentTrigger(comment, { number: 12, isPr: false, url }, 'conversation', 'agent-bot')
     expect(h.receive.mock.calls.map(([trigger]) => trigger)).toEqual([expected])
-    // An Issue has only its conversation; the comments are read since the notification cursor.
-    const since = encodeURIComponent('2026-09-08T00:00:00.000Z')
+    // An Issue has only its conversation; the comments are read from the notification cursor less the delivery allowance.
+    const since = encodeURIComponent(new Date(Date.parse('2026-09-08T00:00:00.000Z') - NOTIFICATION_LAG_MS).toISOString())
     expect(reads.filter(path => path.includes('/comments'))).toEqual([`issues/12/comments?per_page=100&since=${since}`])
+    h.store.close()
+  })
+  it('reads a notified comment written before the poll its notification arrived in', async () => {
+    const h = host()
+    const url = 'https://github.com/acme/widgets/issues/12'
+    // GitHub surfaced the notice late, so the comment predates the cursor this poll reads from.
+    const written = new Date(Date.now() - 10 * 60_000).toISOString()
+    const comment: GithubComment = { id: 6, body: '@agent-bot still broken', user: { login: 'alice', type: 'User' },
+      html_url: `${url}#issuecomment-6`, created_at: written, updated_at: written }
+    notify(h, [issue(12, { created_at: '2026-08-01T00:00:00Z' })], { 12: [comment] }, new Date(Date.now() - 60_000).toISOString())
+    await pollRound(h)
+    const expected = commentTrigger(comment, { number: 12, isPr: false, url }, 'conversation', 'agent-bot')
+    expect(h.receive.mock.calls.map(([trigger]) => trigger.id)).toEqual([expected.id])
     h.store.close()
   })
   it('keeps one body Trigger for an Issue that a later poll reads again', async () => {

@@ -452,7 +452,12 @@ async function pollThread(ctx: SourceContext, round: Round, thread: Thread): Pro
     thread = ctx.threads.get(thread.key) ?? thread
   }
   const checkpoint = KV.github.cursor(number)
-  const since = ctx.state.get(checkpoint) ?? thread.createdAt
+  const reached = ctx.state.get(checkpoint) ?? thread.createdAt
+  // GitHub can return a comment after the poll that should have seen it, so a Thread read reaches back by
+  // the same delivery allowance the notified path uses; a Trigger's ID keeps repeat reads idempotent.
+  const since = Number.isFinite(Date.parse(reached))
+    ? new Date(Date.parse(reached) - NOTIFICATION_LAG_MS).toISOString()
+    : reached
   if (thread.meta.isPr === true) {
     const pr = await pull(ctx, round, number)
     await intakeComments(ctx, { number, isPr: true, url: pr.html_url, prAuthor: pr.user.login }, since, round)

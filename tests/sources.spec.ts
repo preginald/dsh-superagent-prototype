@@ -494,6 +494,20 @@ describe('github source', () => {
     expect(h.store.threads.get('github:7')!.meta).toMatchObject({ title: 'Fix the margin', label: '#7 Fix the margin', facts: { number: { value: '#7' } } })
     h.store.close()
   })
+  it('reads a comment a thread poll surfaces after its checkpoint has moved past it', async () => {
+    const h = host()
+    const thread: Thread = { key: 'github:7', ref: { source: 'github', id: '7' }, createdAt: '2026-09-01T00:00:00Z',
+      lastAt: new Date().toISOString(), subscriptions: ['t'], correlated: [], pending: [], meta: { number: 7, isPr: false, title: 'Fix the margin' } }
+    h.store.threads.save(thread)
+    // The checkpoint is already past the comment: the previous poll read this thread before GitHub returned it.
+    h.store.set('github-cursor:7', '2026-09-01T02:05:00.000Z')
+    const late = { id: 4, body: 'still broken', user: { login: 'b' }, created_at: '2026-09-01T02:00:00Z', updated_at: '2026-09-01T02:00:00Z' }
+    github(h, { 'issues/7': issue(7), 'issues/7/comments': [late] })
+    await pollGithubThreads(h)
+    expect(h.receive).toHaveBeenCalledTimes(1)
+    expect(h.receive.mock.calls[0]![0]).toMatchObject({ actor: { id: 'b' }, text: 'still broken' })
+    h.store.close()
+  })
   it('polls a subscribed Thread for two weeks after the Ticket that follows it ended', async () => {
     const h = host()
     const day = 24 * 3600_000
